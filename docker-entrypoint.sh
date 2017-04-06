@@ -1,6 +1,11 @@
 #!/bin/bash
 set -eu
 
+FULLNAME=$(hostname -f)
+export RABBITMQ_NODENAME="rabbit@$FULLNAME"
+export RABBITMQ_USE_LONG_NAME="true"
+export RABBITMQ_CLUSTER_NODE_NAME="$RABBITMQ_NODENAME"
+
 # allow the container to be started with `--user`
 if [[ "$1" == rabbitmq* ]] && [ "$(id -u)" = '0' ]; then
 	if [ "$1" = 'rabbitmq-server' ]; then
@@ -129,10 +134,6 @@ for conf in "${!configDefaults[@]}"; do
 	eval "export $var=\"\$default\""
 done
 
-# If long & short hostnames are not the same, use long hostnames
-if [ "$(hostname)" != "$(hostname -s)" ]; then
-	: "${RABBITMQ_USE_LONGNAME:=true}"
-fi
 
 if [ "${RABBITMQ_ERLANG_COOKIE:-}" ]; then
 	cookieFile='/var/lib/rabbitmq/.erlang.cookie'
@@ -251,7 +252,7 @@ if [ "$1" = 'rabbitmq-server' ] && [ "$haveConfig" ]; then
 			unset IFS
 
 			rabbitManagementListenerConfig+=(
-				'{ port, 15671 }'
+				'{ port, 15672 }'
 				'{ ssl, true }'
 				"{ ssl_opts, $(rabbit_array "${rabbitManagementSslOptions[@]}") }"
 			)
@@ -268,27 +269,31 @@ if [ "$1" = 'rabbitmq-server' ] && [ "$haveConfig" ]; then
 	fi
 
 	if [ "$(rabbitmq-plugins list -m -e rabbitmq_clusterer)" ]; then
-		rabbitmqClustererConfig+=( '{ version, '${RABBITMQ_CLUSTERER_CONFIG_VERSION:-1}' }' )
-		rabbitmqClustererConfig+=( "{ gospel, { node, rabbit@"$RABBITMQ_CLUSTERER_GOSPEL_NODE" } }" )
-		for node_info in $(compgen -A variable | grep ^RABBITMQ_CLUSTERER_NODE_*); do
-            echo $node_info
+    echo "+PRINTENV"
+    printenv
+    echo "-PRINTENV"
+		rabbitmqClustererConfig+=( '{ version, '$RABBITMQ_CLUSTERER_CONFIG_VERSION' }' )
+		rabbitmqClustererConfig+=( "{ gospel, { node, 'rabbit@"$RABBITMQ_CLUSTERER_GOSPEL_NODE"' } }" )
+		for node_info in $(compgen -A variable | grep '^RABBITMQ_CLUSTERER_NODE_*'); do
+            echo "NODEINFO $node_info"
 			IFS=$','
 			opts=(${!node_info})
+      echo "OPTS $opts"
 			unset IFS
-			rabbitmqClustererConfigNodes+=( "{ rabbit@"${opts[0]}", "${opts[1]}" }" )
+			rabbitmqClustererConfigNodes+=( "{ 'rabbit@"${opts[0]}"', "${opts[1]}" }" )
 		done
         echo "${rabbitmqClustererConfigNodes[@]}"
 		rabbitmqClustererConfig+=( "{ nodes, $(rabbit_array "${rabbitmqClustererConfigNodes[@]}") }" )
-
-		export RABBITMQ_BOOT_MODULE=rabbit_clusterer
-		#export RABBITMQ_SERVER_ADDITIONAL_ERL_ARGS="-pa /path/to/rabbitmq/plugins/rabbitmq_clusterer-${RABBITMQ_CLUSTERER_VERSION}.ez/rabbitmq_clusterer-${RABBITMQ_CLUSTERER_VERSION}/ebin"
 
 		fullConfig+=(
 			"{ rabbitmq_clusterer, $(rabbit_array "{ config, $(rabbit_array "${rabbitmqClustererConfig[@]}") }") }"
 		)
 	fi
 
+  echo "CONFIG"
+  echo "$(rabbit_array "${fullConfig[@]}")."
 	echo "$(rabbit_array "${fullConfig[@]}")." > /etc/rabbitmq/rabbitmq.config
+	echo "$(rabbit_array "${fullConfig[@]}")." > /etc/rabbitmq/cluster.config
 fi
 
 combinedSsl='/tmp/combined.pem'
@@ -307,3 +312,9 @@ if [ "$haveSslConfig" ] && [ -f "$combinedSsl" ]; then
 fi
 
 exec "$@"
+
+
+if [ "$(hostname)" == "$RABBITMQ_CLUSTERER_GOSPEL_NODE"]; then
+   sleep 60
+   rabbitmqctl eval 'rabbit_clusterer:apply_config("/etc/rabbitmq/cluster.config").'
+fi

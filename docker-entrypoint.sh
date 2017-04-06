@@ -293,7 +293,6 @@ if [ "$1" = 'rabbitmq-server' ] && [ "$haveConfig" ]; then
   echo "CONFIG"
   echo "$(rabbit_array "${fullConfig[@]}")."
 	echo "$(rabbit_array "${fullConfig[@]}")." > /etc/rabbitmq/rabbitmq.config
-	echo "$(rabbit_array "${fullConfig[@]}")." > /etc/rabbitmq/cluster.config
 fi
 
 combinedSsl='/tmp/combined.pem'
@@ -312,9 +311,3 @@ if [ "$haveSslConfig" ] && [ -f "$combinedSsl" ]; then
 fi
 
 exec "$@"
-
-
-if [ "$(hostname)" == "$RABBITMQ_CLUSTERER_GOSPEL_NODE"]; then
-   sleep 60
-   rabbitmqctl eval 'rabbit_clusterer:apply_config("/etc/rabbitmq/cluster.config").'
-fi
